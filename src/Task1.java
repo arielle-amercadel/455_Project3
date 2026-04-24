@@ -235,7 +235,7 @@ class Dispatcher extends Thread {
 
 public class Task1 {
     static List<Task> readyQueue = Collections.synchronizedList(new ArrayList<>());
-    static int quantum = 3;
+    static int quantum = 3; // change with command line
     static ReentrantLock lock = new ReentrantLock(); // for multi-core queue
     static int readyCount = 0;
     static final Object barrierLock = new Object();
@@ -267,8 +267,7 @@ public class Task1 {
         }
 
         Random rand = new Random();
-        //int T = rand.nextInt(25) + 1; //Number of tasks
-        int T = 4;
+        int T = rand.nextInt(25) + 1; //Number of tasks
         synchronized (printLock) {
             System.out.println("# threads = " + T);
         }
