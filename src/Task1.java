@@ -1,4 +1,4 @@
-//Task 1: FCFS, RR, NSJF, PSJF for Single Core CPU
+//Task 1:
 //Arielle Mercadel
 import java.util.*;
 import java.util.concurrent.Semaphore;
