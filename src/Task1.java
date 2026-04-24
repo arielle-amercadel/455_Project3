@@ -1,43 +1,240 @@
 //Task 1: FCFS, RR, NSJF, PSJF for Single Core CPU
-// Arielle Mercadel
+//Arielle Mercadel
 import java.util.*;
+import java.util.concurrent.Semaphore;
 
-class Task {
+class Task extends Thread {
+    int id; // ID number
+    int maxBurst; // Total burst length
+    int currentBurst; // Current burst length
+    int remainingTime; // Time left on CPU
+    int arrivalTime; // Time when process arrives
+    boolean isFinished; // Checks if process finished
+    Semaphore sem; // Semaphore to control execution
 
-    int id; //ID number
-    int maxBurst; //Total burst length
-    int currentBurst; //Current burst length
-    int remainingTime; //Time left on CPU
-    int arrivalTime; //Time when process arrives
-    boolean isFinished; //Checks if process finished
 
-    //Constructor to initialize task with ID and burst time
-    public Task(int id, int burst) {
-        this.id = id; //Assign ID
-        this.maxBurst = burst; //Set burst time
-        this.currentBurst = 0; //No CPU time
-        this.remainingTime = burst; //Full burst remaining
-        this.isFinished = false; //Not completed
-        this.arrivalTime = (int)(Math.random() * 5); //Random arrival time
+    public Task(int id, int burst, Semaphore sem) {
+        this.id = id;
+        this.maxBurst = burst;
+        this.currentBurst = 0;
+        this.remainingTime = burst;
+        this.arrivalTime = (int)(Math.random() * 5);
+        this.isFinished = false;
+        this.sem = sem;
+    }
+
+    //Thread logic
+    public void run() {
+        while (remainingTime > 0) {
+            try {
+                sem.acquire(); // Wait for CPU permission
+                if (remainingTime > 0) {
+                    currentBurst++; //Increase executed time
+                    remainingTime--; //Decrease remaining time
+                    //Print progress
+                    System.out.println("Proc. Thread " + id + "  | Using CPU 0; On burst " + currentBurst + ".");
+                    if (remainingTime <= 0) { //Mark finished if done
+                        isFinished = true;
+                    }
+                }
+            } catch (InterruptedException e) {
+                // Used for preemption in PSJF
+                System.out.println("Proc. Thread " + id + "  | Preempted, remaining " + remainingTime);
+            }
+        }
+    }
+}
+
+//Dispatcher thread
+class Dispatcher extends Thread {
+    List<Task> readyQueue; //Ready queue
+    int algorithm; //Selected algorithm
+    int quantum; //Time quantum for RR
+    List<Task> allTasks; //Tasks for PSJf
+    Semaphore cpuSem;
+
+    //Initialize dispatcher
+    public Dispatcher(List<Task> readyQueue, int algorithm, int quantum, List<Task> allTasks, Semaphore cpuSem) {
+        this.readyQueue = readyQueue;
+        this.algorithm = algorithm;
+        this.quantum = quantum;
+        this.allTasks = allTasks;
+        this.cpuSem = cpuSem;
+    }
+
+    //Select algorithm
+    public void run() {
+        if (algorithm == 1) {
+            runFCFS();
+        } else if (algorithm == 2) {
+            runRR();
+        } else if (algorithm == 3) {
+            runNSJF();
+        } else if (algorithm == 4) {
+            runPSJF();
+        }
+    }
+
+    //First Come First Serve
+    private void runFCFS() {
+        synchronized (readyQueue) { //Protect shared queue
+            while (!readyQueue.isEmpty()) {
+                Task t = readyQueue.remove(0); //Get first task
+                System.out.println("Dispatcher 0    | Running process " + t.id);
+                runCPU(t, t.remainingTime);
+            }
+        }
+    }
+
+    //Round Robin
+    private void runRR() {
+        while (true) {
+            Task t = null;
+            //Get next task
+            synchronized (readyQueue) { //Protect queue
+                if (!readyQueue.isEmpty()) {
+                    t = readyQueue.remove(0); //Get next task
+                }
+            }
+            if (t == null) break; //Exit if no tasks
+            System.out.println("Dispatcher 0    | Running process " + t.id);
+            //Get execution time
+            int timeWindow = Math.min(quantum, t.remainingTime);
+            runCPU(t, timeWindow); //Run for quantum
+            //Add again if not finished
+            if (!t.isFinished) {
+                synchronized (readyQueue) {
+                    readyQueue.add(t);
+                }
+            }
+        }
+    }
+
+    //Non-preemptive Shortest Job First
+    private void runNSJF() {
+        while (true) {
+            Task shortest = null;
+            //Find shortest remaining task
+            synchronized (readyQueue) {
+                if (!readyQueue.isEmpty()) {
+                    shortest = readyQueue.get(0);
+                    for (Task task : readyQueue) {
+                        if (task.remainingTime < shortest.remainingTime) {
+                            shortest = task;
+                        }
+                    }
+                    readyQueue.remove(shortest); //Remove selected task
+                }
+            }
+            if (shortest == null) break; //Exit if empty
+            System.out.println("Dispatcher 0    | Running process " + shortest.id);
+            runCPU(shortest, shortest.remainingTime);
+        }
+    }
+
+    //Preemptive Shortest Job First
+    private void runPSJF() {
+        int time = 0; //Simulation clock
+        List<Task> notArrived = new ArrayList<>(allTasks);
+        Task current = null; //Current running task
+
+        while (!readyQueue.isEmpty() || !notArrived.isEmpty() || current != null) {
+            // Check for newly arrived tasks
+            synchronized (notArrived) {
+                Iterator<Task> it = notArrived.iterator();
+                while (it.hasNext()) {
+                    Task t = it.next();
+                    if (t.arrivalTime <= time) {
+                        synchronized (readyQueue) {
+                            readyQueue.add(t);
+                        }
+                        it.remove(); //Remove from future list
+                        System.out.println("Dispatcher 0    | Process " + t.id + " arrived");
+                        printReadyQueue();
+                    }
+                }
+            }
+
+            // Find shortest task in ready queue
+            Task shortest = null;
+            synchronized (readyQueue) {
+                for (Task t : readyQueue) {
+                    if (shortest == null || t.remainingTime < shortest.remainingTime) {
+                        shortest = t;
+                    }
+                }
+            }
+            //Decide whether to start or preempt
+            if (current == null) {
+                if (shortest != null) {
+                    synchronized (readyQueue) {
+                        readyQueue.remove(shortest);
+                    }
+                    current = shortest;
+                    System.out.println("Dispatcher 0    | Running process " + current.id);
+                }
+            } else {
+                if (shortest != null && shortest.remainingTime < current.remainingTime) {
+                    current.interrupt(); // Preempt
+                    synchronized (readyQueue) {
+                        readyQueue.add(current); //Add old task back
+                    }
+                    synchronized (readyQueue) {
+                        readyQueue.remove(shortest);
+                    }
+                    current = shortest;
+                    System.out.println("Dispatcher 0    | Running process " + current.id);
+                }
+            }
+
+            if (current != null) {
+                // Run one cycle
+                current.sem.release();
+                try {
+                    Thread.sleep(10); // Simulate time
+                } catch (InterruptedException e) {}
+                if (current.isFinished) {
+                    current = null;
+                }
+            }
+            time++;
+        }
+    }
+
+    //CPU
+    private void runCPU(Task t, int timeWindow) {
+        System.out.println("Proc. Thread " + t.id + "  | On CPU: MB=" + t.maxBurst +
+                ", CB=" + t.currentBurst + ", BT=" + timeWindow + ", BG=" + timeWindow);
+        for (int i = 0; i < timeWindow; i++) {
+            t.sem.release(); //Allow one cycle
+            try {
+                Thread.sleep(10); // Simulate cycle time
+            } catch (InterruptedException e) {}
+        }
+        System.out.println();
+    }
+
+    //Print ready queue
+    private void printReadyQueue() {
+        synchronized (readyQueue) {
+            System.out.println("--------------- Ready Queue ---------------");
+            for (Task t : readyQueue) {
+                System.out.println("ID:" + t.id + ", Max Burst:" + t.maxBurst + ", Current Burst:" + t.currentBurst);
+            }
+            System.out.println("-------------------------------------------\n");
+        }
     }
 }
 
 public class Task1 {
-    static List<Task> readyQueue = new ArrayList<>(); //ready queue
-    static int cpuId = 0; //CPU ID
-    static int quantum = 5; //Time quantum for RR
+    static List<Task> readyQueue = Collections.synchronizedList(new ArrayList<>());
+    static int cpuId = 0;
+    static int quantum = 5;
 
     public static void main(String[] args) {
-        int algorithm = 4; //Algorithm testing
+        int algorithm = 4; // algorithm testing
 
-        //Command Line
-        //if (args.length >= 2 && args[0].equals("-S")) {
-            //try {
-                //algorithm = Integer.parseInt(args[1]);
-            //} catch (Exception e) {}
-       // }
-
-        //Prints algorithm chosen
+        //Print selected algorithm
         if (algorithm == 1)
             System.out.println("Scheduler Algorithm Select: FCFS");
         else if (algorithm == 2)
@@ -47,242 +244,50 @@ public class Task1 {
         else if (algorithm == 4)
             System.out.println("Scheduler Algorithm Select: Preemptive - Shortest Job First");
 
-        //Random generator for burst times
         Random rand = new Random();
-
-        //Number of threads to simulate
-        int T = rand.nextInt(25)+1;
+        int T = rand.nextInt(25) + 1; //Number of tasks
         System.out.println("# threads = " + T);
 
-        //List of all processes
-        List<Task> processes = new ArrayList<>();
+        List<Task> processes = new ArrayList<>(); //Store tasks
+        Semaphore cpuSem = new Semaphore(1); //Share CPU
 
-        //Create tasks
         for (int i = 0; i < T; i++) {
-            int burst = rand.nextInt(50) + 1; //random burst b/t 1-50
-            Task t = new Task(i, burst); //
-            //Print creation message
+            int burst = rand.nextInt(50) + 1; //Burst time
+            Task t = new Task(i, burst, new Semaphore(0));
             System.out.println("Main thread     | Creating process thread " + i);
-            processes.add(t);
+            processes.add(t); //Add to list
+            t.start(); // Start thread
         }
 
-        //Ready Queue
-        readyQueue.clear(); //Clear any previous data
-        readyQueue.addAll(processes); //Add all generated processes in queue
-        printReadyQueue(); //Print ready queue
+        //Fill queue for not PSJF
+        if (algorithm != 4) {
+            synchronized (readyQueue) {
+                readyQueue.addAll(processes);
+            }
+            printReadyQueue();
+        }
 
-        //Dispatcher
         System.out.println("Main thread     | Forking dispatcher 0");
         System.out.println("Dispatcher 0    | Using CPU 0");
         System.out.println("Dispatcher 0    | Now releasing dispatchers.\n");
 
-        //Run selected algorithm
-        if (algorithm == 1) { //FCFS
-            System.out.println("Dispatcher 0    | Running FCFS algorithm\n");
-            runFCFS();
-        }
-        else if (algorithm == 2) { //RR
-            System.out.println("Dispatcher 0    | Running RR algorithm, Time Quantum = " + quantum + "\n");
-            runRR();
-        }
-        else if (algorithm == 3) { //NSJF
-            System.out.println("Dispatcher 0    | Running Non Preemptive - Shortest Job First\n");
-            runNSJF();
-        }
-        else if (algorithm == 4) { //PSJF
-            System.out.println("Dispatcher 0    | Running Preemptive - Shortest Job First\n");
-            runPSJF(processes);
-        }
-        //End simulation
+        Dispatcher dispatcher = new Dispatcher(readyQueue, algorithm, quantum, processes, cpuSem);
+        dispatcher.start(); //Start scheduler
+
+        try {
+            dispatcher.join(); // Wait for dispatcher to finish
+        } catch (InterruptedException e) {}
+
         System.out.println("Main thread     | Exiting.");
     }
 
-    //First Come, First Served (FCFS)
-    public static void runFCFS() {
-        for (Task t : readyQueue) {
-            //Dispatcher selects next process
-            System.out.println("Dispatcher 0    | Running process " + t.id);
-            runCPU(t, t.remainingTime); //Run process for full time
-        }
-    }
-
-    //Round Robin
-    public static void runRR() {
-        //Create queue
-        Queue<Task> queue = new LinkedList<>(readyQueue);
-        //Run until all processes are completed
-        while (!queue.isEmpty()) {
-            Task t = queue.poll(); //Get next process
-            System.out.println("Dispatcher 0    | Running process " + t.id);
-            //See how long the process can run
-            int timeWindow = Math.min(quantum, t.remainingTime);
-            //Execute process for selected time
-            runCPU(t, timeWindow);
-
-            //If process not finished, add it back to the queue
-            if (!t.isFinished) {
-                queue.add(t);
-            }
-        }
-    }
-
-    //Non-Preemptive Shortest Job First (NSJF)
-    public static void runNSJF() {
-        //Create copy of queue
-        List<Task> queue = new ArrayList<>(readyQueue);
-
-        //Run until all processes have been scheduled
-        while (!queue.isEmpty()) {
-            //Set first process as shortest burst
-            Task shortest = queue.get(0);
-            //Look for process with shortest burst time
-            for (Task t : queue) {
-                if (t.maxBurst < shortest.maxBurst) {
-                    shortest = t;
-                }
-            }
-            //Remove shortest job from queue
-            queue.remove(shortest);
-            //Dispatcher selects shortest job
-            System.out.println("Dispatcher 0    | Running process " + shortest.id);
-            //Run selected process
-            runCPU(shortest, shortest.remainingTime);
-        }
-    }
-
-    //Preemptive Shortest Job First (PSJF)
-    public static void runPSJF(List<Task> processes) {
-        int time = 0; //clock
-
-        //List of processes ready to run
-        List<Task> ready = new ArrayList<>();
-        //List of processes that have not arrived yet
-        List<Task> notArrived = new ArrayList<>(processes);
-
-        //Current running process
-        Task current = null;
-
-        //Run until everything is finished
-        while (!ready.isEmpty() || !notArrived.isEmpty() || current != null) {
-
-            //Check for new arrivals
-            boolean arrived = false;
-            Iterator<Task> it = notArrived.iterator();
-            //Move newly arrived tasks into ready queue
-            while (it.hasNext()) {
-                Task t = it.next();
-                if (t.arrivalTime <= time) {
-                    ready.add(t);
-                    it.remove();
-                    //Print arrival
-                    System.out.println("Dispatcher 0    | Process " + t.id + " arrived");
-                    arrived = true;
-                }
-            }
-            //If a process arrived, print updated ready queue
-            if (arrived) {
-                System.out.println("--------------- Ready Queue ---------------");
-                for (Task t : ready) {
-                    System.out.println("ID:" + t.id + ", Max Burst:" + t.maxBurst + ", Current Burst:" + t.currentBurst);
-                }
-                System.out.println("-------------------------------------------\n");
-            }
-
-            //Select shortest process
-            Task shortest = null;
-            //Search for process with smallest remainin time
-            for (Task t : ready) {
-                if (shortest == null || t.remainingTime < shortest.remainingTime) shortest = t;
-            }
-            //Preemption
-            if (current == null) {
-                //If no process running, start shortest process
-                if (shortest != null) {
-                    ready.remove(shortest);
-                    current = shortest;
-                    //Print updated ready queue after decision
-                    System.out.println("Dispatcher 0    | Running process " + current.id);
-                    System.out.println("--------------- Ready Queue ---------------");
-                    for (Task t : ready) {
-                        System.out.println("ID:" + t.id + ", Max Burst:" + t.maxBurst + ", Current Burst:" + t.currentBurst);
-                    }
-                    System.out.println("-------------------------------------------\n");
-                }
-            } else {
-                //If a process is running, check if new process is shorter
-                if (shortest != null && shortest.remainingTime < current.remainingTime) {
-                    //Preempt current process if needed
-                    if (current.remainingTime > 0) {
-                        ready.add(current);
-                    }
-                    //Switch to shorter process
-                    ready.remove(shortest);
-                    current = shortest;
-
-                    System.out.println("Dispatcher 0    | Running process " + current.id);
-                    //Reprint ready queue
-                    System.out.println("--------------- Ready Queue ---------------");
-                    for (Task t : ready) {
-                        System.out.println("ID:" + t.id + ", Max Burst:" + t.maxBurst + ", Current Burst:" + t.currentBurst);
-                    }
-                    System.out.println("-------------------------------------------\n");
-                }
-            }
-
-            //If no process is running, then CPU is idle
-            if (current == null) {
-                time++;
-                continue;
-            }
-
-            //Run one CPU cycle
-            current.currentBurst++; //increment burst time
-            current.remainingTime--; //decrease time left
-            System.out.println("Proc. Thread " + current.id +
-                    "  | Using CPU 0; On burst " + current.currentBurst + ".");
-
-            //Check if process if finished
-            if (current.remainingTime <= 0) {
-                current.isFinished = true;
-                current = null;
-            }
-            //Advance time
-            time++;
-        }
-    }
-    //CPU simulation
-    public static void runCPU(Task t, int timeWindow) {
-        //CPU does not run longer than time left
-        if (timeWindow > t.remainingTime) {
-            timeWindow = t.remainingTime;
-        }
-        //Print execution details
-        System.out.println("Proc. Thread " + t.id + "  | On CPU: MB=" + t.maxBurst +
-                ", CB=" + t.currentBurst + ", BT=" + timeWindow + ", BG:=" + timeWindow);
-        //CPU execution
-        for (int i = 1; i <= timeWindow; i++) {
-            t.currentBurst++; //increment burst time
-            t.remainingTime--; //decrement time lef
-            //print progress for each cycle
-            System.out.println("Proc. Thread " + t.id + "  | Using CPU " + cpuId +
-                    "; On burst " + t.currentBurst + ".");
-        }
-        //If no time left, process is finished
-        if (t.remainingTime <= 0) {
-            t.isFinished = true;
-        }
-        System.out.println();
-    }
-
-    //Print ready queue
     public static void printReadyQueue() {
-        //Header
-        System.out.println("\n--------------- Ready Queue ---------------");
-        //Print ID, maxBurst, and currentBurst
-        for (Task t : readyQueue) {
-            System.out.println("ID:" + t.id + ", Max Burst:" + t.maxBurst +
-                    ", Current Burst:" + t.currentBurst);
+        synchronized (readyQueue) {
+            System.out.println("\n--------------- Ready Queue ---------------");
+            for (Task t : readyQueue) {
+                System.out.println("ID:" + t.id + ", Max Burst:" + t.maxBurst + ", Current Burst:" + t.currentBurst);
+            }
+            System.out.println("-------------------------------------------\n");
         }
-        System.out.println("-------------------------------------------\n");
     }
 }
