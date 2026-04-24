@@ -1,7 +1,10 @@
 //Task 1:
 //Arielle Mercadel
+// Task 2: Multi-Core
+// Spencer Bourque
 import java.util.*;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.ReentrantLock;
 
 class Task extends Thread {
     int id; // ID number
@@ -28,13 +31,16 @@ class Task extends Thread {
         while (remainingTime > 0) {
             try {
                 sem.acquire(); // Wait for CPU permission
-                if (remainingTime > 0) {
-                    currentBurst++; //Increase executed time
-                    remainingTime--; //Decrease remaining time
-                    //Print progress
-                    System.out.println("Proc. Thread " + id + "  | Using CPU 0; On burst " + currentBurst + ".");
-                    if (remainingTime <= 0) { //Mark finished if done
-                        isFinished = true;
+
+                synchronized (this) {
+                    if (remainingTime > 0) {
+                        currentBurst++; //Increase executed time
+                        remainingTime--; //Decrease remaining time
+                        //Print progress
+                        System.out.println("Proc. Thread " + id + "  | Using CPU 0; On burst " + currentBurst + ".");
+                        if (remainingTime <= 0) { //Mark finished if done
+                            isFinished = true;
+                        }
                     }
                 }
             } catch (InterruptedException e) {
@@ -45,7 +51,7 @@ class Task extends Thread {
     }
 }
 
-//Dispatcher thread
+// single core Dispatcher thread
 class Dispatcher extends Thread {
     List<Task> readyQueue; //Ready queue
     int algorithm; //Selected algorithm
@@ -226,14 +232,26 @@ class Dispatcher extends Thread {
     }
 }
 
+
 public class Task1 {
     static List<Task> readyQueue = Collections.synchronizedList(new ArrayList<>());
-    static int cpuId = 0;
-    static int quantum = 5;
+    static int quantum = 3;
+    static ReentrantLock lock = new ReentrantLock(); // for multi-core queue
+    static int readyCount = 0;
+    static final Object barrierLock = new Object();
+    static int totalCores;
+    static final Object printLock = new Object();
 
     public static void main(String[] args) {
-        int algorithm = 4; // algorithm testing
+        int algorithm = 3; // algorithm testing
+        int cores = 1; // core testing
+        // quantum testing   // change all these with command line stuff
+        totalCores = cores;
 
+        if (cores > 1 && algorithm == 4) {
+            System.out.println("Error: PSJF only allowed with 1 core");
+            return;
+        }
         //Print selected algorithm
         if (algorithm == 1)
             System.out.println("Scheduler Algorithm Select: FCFS");
@@ -244,41 +262,201 @@ public class Task1 {
         else if (algorithm == 4)
             System.out.println("Scheduler Algorithm Select: Preemptive - Shortest Job First");
 
-        Random rand = new Random();
-        int T = rand.nextInt(25) + 1; //Number of tasks
-        System.out.println("# threads = " + T);
+        synchronized (printLock) {
+            System.out.println("Core Count Select: " + cores + " core(s)");
+        }
 
+        Random rand = new Random();
+        //int T = rand.nextInt(25) + 1; //Number of tasks
+        int T = 4;
+        synchronized (printLock) {
+            System.out.println("# threads = " + T);
+        }
+        //List of all processes
         List<Task> processes = new ArrayList<>(); //Store tasks
         Semaphore cpuSem = new Semaphore(1); //Share CPU
 
+        //Create tasks
         for (int i = 0; i < T; i++) {
             int burst = rand.nextInt(50) + 1; //Burst time
             Task t = new Task(i, burst, new Semaphore(0));
             System.out.println("Main thread     | Creating process thread " + i);
             processes.add(t); //Add to list
-            t.start(); // Start thread
-        }
-
-        //Fill queue for not PSJF
-        if (algorithm != 4) {
-            synchronized (readyQueue) {
-                readyQueue.addAll(processes);
+            if (cores == 1 || algorithm == 4) {
+                t.start();
             }
-            printReadyQueue();
         }
 
-        System.out.println("Main thread     | Forking dispatcher 0");
-        System.out.println("Dispatcher 0    | Using CPU 0");
-        System.out.println("Dispatcher 0    | Now releasing dispatchers.\n");
+        if (cores == 1) {
+            //  Single core (Task 1)
+            if (algorithm != 4) {
+                synchronized (readyQueue) {
+                    readyQueue.addAll(processes);
+                }
+                printReadyQueue();
+            }
 
-        Dispatcher dispatcher = new Dispatcher(readyQueue, algorithm, quantum, processes, cpuSem);
-        dispatcher.start(); //Start scheduler
+            System.out.println("Main thread     | Forking dispatcher 0");
+            System.out.println("Dispatcher 0    | Using CPU 0");
+            System.out.println("Dispatcher 0    | Now releasing dispatchers.\n");
 
-        try {
-            dispatcher.join(); // Wait for dispatcher to finish
-        } catch (InterruptedException e) {}
+            Dispatcher dispatcher = new Dispatcher(readyQueue, algorithm, quantum, processes, cpuSem);
+            dispatcher.start();
+
+            try {
+                dispatcher.join();
+            } catch (InterruptedException e) {
+            }
+        }
+        // Multi-core task 2
+        else if (cores > 1){
+            readyQueue.clear();
+            readyQueue.addAll(processes);
+            printReadyQueue();
+
+            MultiDispatcher[] dispatchers = new MultiDispatcher[cores];
+
+            for (int i = 0; i < cores; i++) {
+                System.out.printf("Main thread     | Forking dispatcher %d\n", i);
+                dispatchers[i] = new MultiDispatcher(i, algorithm, quantum);
+                dispatchers[i].start();
+            }
+
+            for (int i = 0; i < cores; i++) {
+                try { dispatchers[i].join(); } catch (Exception e) {}
+            }
+        }
 
         System.out.println("Main thread     | Exiting.");
+    }
+
+    static class MultiDispatcher extends Thread {
+        int cpuId;
+        int algorithm;
+        int quantum;
+        public MultiDispatcher(int cpuId, int algorithm, int quantum){
+            this.cpuId = cpuId;
+            this.algorithm = algorithm;
+            this.quantum = quantum;
+        }
+
+
+        public void run() {
+
+            synchronized (printLock) {
+                System.out.println("Dispatcher " + cpuId + "    | Using CPU " + cpuId);
+            }
+
+            synchronized(barrierLock) {
+                readyCount++;
+                if (readyCount == totalCores) {
+                    System.out.println("Dispatcher " + cpuId +" | Now releasing dispatchers.");
+                    readyCount = 0;
+                    barrierLock.notifyAll();
+                } else {
+                    try {
+                        barrierLock.wait();
+                    } catch (InterruptedException e) {}
+                }
+            }
+
+            if (algorithm == 1) { //FCFS
+                synchronized (printLock) {
+                    System.out.println("Dispatcher " + cpuId + "    | Running FCFS algorithm");
+                }
+            }
+            else if (algorithm == 2) {
+                synchronized (printLock) {
+                    System.out.println("Dispatcher " + cpuId + "    | Running RR algorithm, Time Quantum = " + quantum);
+                }
+            }
+            else if (algorithm == 3) { //NSJF
+                synchronized (printLock) {
+                    System.out.println("Dispatcher " + cpuId + "    | Running Non Preemptive - Shortest Job First");
+                }
+            }
+
+            while (true){
+                Task task = null;
+                // lock for
+                lock.lock();
+                try{
+                    if (readyQueue.isEmpty())
+                        break;
+                    // FCFS
+                    if (algorithm == 1)
+                        task = readyQueue.remove(0);
+                        // NSJF
+                    else if (algorithm == 3){
+                        Task shortest = readyQueue.get(0);
+                        for (Task t : readyQueue){
+                            if (t.maxBurst < shortest.maxBurst){
+                                shortest = t;
+                            }
+                        }
+                        readyQueue.remove(shortest);
+                        task = shortest;
+                    }
+                    else
+                        task = readyQueue.remove(0);
+
+                } finally {
+                    lock.unlock();
+                }
+                if (task == null) continue;
+
+                synchronized (printLock) {
+                    System.out.println("Dispatcher " + cpuId + "   | Running process " + task.id);
+                }
+                // RR
+                if(algorithm == 2){
+                    int timeWindow = Math.min(quantum, task.remainingTime);
+                    //Execute process for selected time
+                    runCPUMulti(task, timeWindow, cpuId);
+
+                    if(task.remainingTime > 0) {
+                        lock.lock();
+                        try {
+                            readyQueue.add(task);
+                        }
+                        finally {
+                            lock.unlock();
+                        }
+                    }
+                }
+                else
+                    runCPUMulti(task, task.remainingTime, cpuId);
+            }
+
+        }
+    }
+
+    public static void runCPUMulti(Task t, int timeWindow, int cpuId) {
+        //CPU does not run longer than time left
+        if (timeWindow > t.remainingTime) {
+            timeWindow = t.remainingTime;
+        }
+        //Print execution details
+        synchronized (printLock) {
+            System.out.println("Proc. Thread " + t.id + "  | On CPU: MB=" + t.maxBurst +
+                    ", CB=" + t.currentBurst + ", BT=" + timeWindow + ", BG:=" + timeWindow);
+        }
+        //CPU execution
+        for (int i = 1; i <= timeWindow; i++) {
+            t.currentBurst++; //increment burst time
+            t.remainingTime--; //decrement time lef
+            //print progress for each cycle
+            synchronized (printLock) {
+                System.out.println("Proc. Thread " + t.id + "  | Using CPU " + cpuId +
+                        "; On burst " + t.currentBurst + ".");
+            }
+
+        }
+        //If no time left, process is finished
+        if (t.remainingTime <= 0) {
+            t.isFinished = true;
+        }
+        System.out.println();
     }
 
     public static void printReadyQueue() {
@@ -291,3 +469,4 @@ public class Task1 {
         }
     }
 }
+
