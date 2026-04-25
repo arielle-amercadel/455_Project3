@@ -235,23 +235,25 @@ class Dispatcher extends Thread {
 
 public class Task1 {
     static List<Task> readyQueue = Collections.synchronizedList(new ArrayList<>());
-    static int quantum = 3; // change with command line
+    static int quantum;
     static ReentrantLock lock = new ReentrantLock(); // for multi-core queue
     static int readyCount = 0;
     static final Object barrierLock = new Object();
     static int totalCores;
     static final Object printLock = new Object();
 
-    public static void main(String[] args) {
-        int algorithm = 3; // algorithm testing
-        int cores = 1; // core testing
-        // quantum testing   // change all these with command line stuff
+    public static void main(int algorithm, int cores, int selectedQuantum) {
+        quantum = selectedQuantum;
         totalCores = cores;
 
+        /*
+        // check is already in Main
         if (cores > 1 && algorithm == 4) {
             System.out.println("Error: PSJF only allowed with 1 core");
             return;
         }
+        */
+
         //Print selected algorithm
         if (algorithm == 1)
             System.out.println("Scheduler Algorithm Select: FCFS");
